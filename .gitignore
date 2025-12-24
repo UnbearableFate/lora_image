@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Training outputs / logs
+runs/
+outputs/
+checkpoints/
+logs/
+*.log
+*.out
+*.err
+*.tfevents*
+events.out.tfevents*
+
+# Weights / checkpoints
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+
+# Experiment trackers
+wandb/
+mlruns/
+lightning_logs/
+
+# Data artifacts (keep placeholders via negation if needed)
+data/**
+!data/.gitkeep
+!data/README.md
+
+runs

@@ -1,0 +1,10 @@
+accelerate>=0.28.0
+datasets>=2.14.0
+evaluate>=0.4.0
+fire>=0.6.0
+peft>=0.10.0
+timm>=0.9.0
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.40.0
+wandb>=0.16.0

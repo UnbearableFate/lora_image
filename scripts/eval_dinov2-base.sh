@@ -11,7 +11,7 @@
 set -euo pipefail
 
 DATASET="${DATASET:-fw407/vtab-1k_cifar}"
-MODEL_PATH="runs/vit_base_lora/lora_r16_a1_kaiming_20260104-130450"
+MODEL_PATH="runs/qkv/lora_r16_a1_kaiming_20260105-051726"
 SPLIT="${SPLIT:-test}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 MIXED_PRECISION="${MIXED_PRECISION:-bf16}"

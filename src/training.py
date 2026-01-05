@@ -1,5 +1,8 @@
+import datetime
+import math
 import os
-from typing import Dict, Optional, Sequence, Union
+import re
+from typing import Any, Dict, Optional, Sequence, Union
 
 import evaluate
 import numpy as np
@@ -17,16 +20,7 @@ from accelerate import Accelerator
 from src.data import get_label_info, load_vtab_dataset, preprocess_splits, resolve_dataset_id
 from src.lora_loader import LoraHyperparameters, VisionDataCollator, attach_lora_adapter, get_lora_config
 
-def _maybe_enable_wandb(use_wandb: bool, project: str, run_name: Optional[str]) -> None:
-    if not use_wandb:
-        os.environ["WANDB_MODE"] = os.environ.get("WANDB_MODE", "disabled")
-        return
-    if os.environ.get("WANDB_API_KEY") is None and os.environ.get("WANDB_MODE") is None:
-        os.environ["WANDB_MODE"] = "offline"
-    os.environ.setdefault("WANDB_PROJECT", project)
-    if run_name:
-        os.environ.setdefault("WANDB_NAME", run_name)
-
+from src.utis import _maybe_enable_wandb, build_wandb_project_run_tags, init_classification_head
 
 def train(
     dataset_name: str = "fw407/vtab-1k_cifar",
@@ -54,28 +48,126 @@ def train(
     weight_decay: float = 0.05,
     warmup_ratio: float = 0.05,
     num_train_epochs: float = 10.0,
-    batch_size: int = 32,
+    global_batch_size: int = 32,
+    per_device_batch_size: int = 4,
     eval_batch_size: Optional[int] = None,
-    gradient_accumulation_steps: int = 1,
     logging_steps: int = 50,
     eval_steps: int = 500,
     seed: int = 42,
     use_wandb: bool = True,
-    wandb_project: str = "vtab-lora",
-    wandb_run_name: Optional[str] = None,
+    wandb_online: bool = True,
     fp16: bool = False,
     bfloat16: bool = False,
     gradient_checkpointing: bool = False,
     cache_dir: Optional[str] = None,
     resume_from_checkpoint: Optional[str] = None,
     push_to_hub: bool = False,
+    use_cleaned_svd_ref_trainer: bool = False,
+    adjust_lora_alpha_at: Union[str, Sequence[int]] = (2,),
+    min_alpha_ratio: float = 0.8,
+    max_alpha_ratio: float = 1.25,
+    repeat_n: int = 3,
+    repeat_warmup_ratio: float = 0.03,
+    repeat_decay_ratio: float = 0.03,
+    repeat_end_lr_rate: float = 0.97,
+    final_warmup_ratio: float = 0.03,
+    min_lr_rate: float = 0.001,
+    repeat_decay_type: str = "cosine",
+    final_decay_type: str = "linear",
+    warmup_start_lr_rate: float = 0.001,
+    first_warmup_start_lr_rate: float = 0.001,
+    last_epoch: int = -1,
+    timestamp: Optional[str] = None,
 ) -> Dict[str, float]:
     print("Starting training with the following parameters:")
     accelerator = Accelerator()
     set_seed(seed)
-    _maybe_enable_wandb(use_wandb, wandb_project, wandb_run_name)
+    timestamp = timestamp or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     dataset_id = resolve_dataset_id(dataset_name)
+
+    def _parse_str_list(value) -> Optional[list[str]]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            parts = [p.strip() for p in value.split(",")]
+            return [p for p in parts if p]
+        return [str(v).strip() for v in value if str(v).strip()]
+
+    def _parse_int_list(value) -> Optional[list[int]]:
+        parsed = _parse_str_list(value)
+        if parsed is None:
+            return None
+        values: list[int] = []
+        for item in parsed:
+            values.append(int(item))
+        return values
+
+    target_modules_list = _parse_str_list(target_modules) or []
+    if not target_modules_list:
+        raise ValueError("target_modules must contain at least one module name fragment.")
+    modules_to_save_list = _parse_str_list(modules_to_save)
+
+    effective_init_seed = init_seed if init_seed is not None else seed * 2 + 1
+
+    parsed_init_lora_weights = init_lora_weights
+    if isinstance(parsed_init_lora_weights, str):
+        lowered = parsed_init_lora_weights.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            parsed_init_lora_weights = True
+        elif lowered in {"false", "0", "no"}:
+            parsed_init_lora_weights = False
+        elif lowered in {"none", "null"}:
+            parsed_init_lora_weights = None
+        else:
+            parsed_init_lora_weights = lowered
+
+    parsed_adjust_lora_alpha_at = _parse_int_list(adjust_lora_alpha_at)
+
+    derived_project, derived_run_name, tags = build_wandb_project_run_tags(
+            model_name=model_name,
+            dataset_id=dataset_id,
+            peft_variant=peft_variant,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            lora_bias=lora_bias,
+            target_modules=target_modules_list,
+            modules_to_save=modules_to_save_list,
+            init_lora_weights=parsed_init_lora_weights,
+            init_num_samples=init_num_samples,
+            init_batch_size=init_batch_size,
+            init_seed=effective_init_seed,
+            corda_method=corda_method,
+            loraga_direction=loraga_direction,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            warmup_ratio=warmup_ratio,
+            num_train_epochs=num_train_epochs,
+            global_batch_size=global_batch_size,
+            per_device_batch_size=per_device_batch_size,
+            eval_steps=eval_steps,
+            logging_steps=logging_steps,
+            seed=seed,
+            fp16=fp16,
+            bfloat16=bfloat16,
+            gradient_checkpointing=gradient_checkpointing,
+            use_cleaned_svd_ref_trainer=use_cleaned_svd_ref_trainer,
+            repeat_n=repeat_n,
+            adjust_lora_alpha_at=parsed_adjust_lora_alpha_at,
+            timestamp=timestamp,
+        )
+    
+    if accelerator.is_main_process:   
+        _maybe_enable_wandb(
+            use_wandb,
+            derived_project,
+            derived_run_name,
+            tags=tags,
+            online=wandb_online,
+            config=locals(),
+        )
+
     raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
     if train_split not in raw_dataset or eval_split not in raw_dataset:
         raise ValueError(f"Splits {train_split}/{eval_split} not found in dataset {dataset_id}.")
@@ -106,33 +198,6 @@ def train(
         model.gradient_checkpointing_enable()
     
     print(model)
-
-    def _parse_str_list(value) -> Optional[list[str]]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            parts = [p.strip() for p in value.split(",")]
-            return [p for p in parts if p]
-        return [str(v).strip() for v in value if str(v).strip()]
-
-    target_modules_list = _parse_str_list(target_modules) or []
-    if not target_modules_list:
-        raise ValueError("target_modules must contain at least one module name fragment.")
-    modules_to_save_list = _parse_str_list(modules_to_save)
-
-    effective_init_seed = init_seed if init_seed is not None else seed * 2 + 1
-
-    parsed_init_lora_weights = init_lora_weights
-    if isinstance(parsed_init_lora_weights, str):
-        lowered = parsed_init_lora_weights.strip().lower()
-        if lowered in {"true", "1", "yes"}:
-            parsed_init_lora_weights = True
-        elif lowered in {"false", "0", "no"}:
-            parsed_init_lora_weights = False
-        elif lowered in {"none", "null"}:
-            parsed_init_lora_weights = None
-        else:
-            parsed_init_lora_weights = lowered
 
     lora_hparams = LoraHyperparameters(
         variant=peft_variant,
@@ -167,6 +232,9 @@ def train(
         data_collator=VisionDataCollator(),
     )
 
+    # where we initialize the classification head weights with a normal distribution with σ = 2e-5 and bias with zeros
+    init_classification_head(model, weight_std=2e-5)
+    
     accuracy = evaluate.load("accuracy")
 
     def compute_metrics(eval_pred):
@@ -174,8 +242,12 @@ def train(
         preds = np.argmax(logits, axis=-1)
         return accuracy.compute(predictions=preds, references=labels)
 
+    assert global_batch_size % (per_device_batch_size * accelerator.num_processes) == 0, "global_batch_size must be divisible by per_device_batch_size * number of processes"
+    gradient_accumulation_steps = global_batch_size // (per_device_batch_size * accelerator.num_processes) 
+    max_steps = math.ceil(num_train_epochs * len(prepared["train"]) / global_batch_size)
+
     args = TrainingArguments(
-        output_dir=output_dir,
+        output_dir=os.path.join(output_dir, derived_run_name),
         remove_unused_columns=False,
         eval_strategy="steps",
         save_strategy="steps",
@@ -185,9 +257,9 @@ def train(
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         warmup_ratio=warmup_ratio,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=eval_batch_size or batch_size,
-        num_train_epochs=num_train_epochs,
+        per_device_train_batch_size=per_device_batch_size,
+        per_device_eval_batch_size=eval_batch_size or per_device_batch_size,
+        max_steps=max_steps,
         gradient_accumulation_steps=gradient_accumulation_steps,
         report_to=["wandb"] if use_wandb else [],
         seed=seed,
@@ -198,17 +270,48 @@ def train(
         metric_for_best_model="accuracy",
         greater_is_better=True,
         push_to_hub=push_to_hub,
+        save_total_limit=2,
     )
 
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=prepared["train"],
-        eval_dataset=prepared["validation"],
-        processing_class=processor,
-        data_collator=default_data_collator,
-        compute_metrics=compute_metrics,
-    )
+    if use_cleaned_svd_ref_trainer:
+        from src.cleaned_svd_ref_trainer import get_cleaned_svd_ref_trainer
+
+        adjust_lora_alpha_at_list = parsed_adjust_lora_alpha_at or []
+        trainer = get_cleaned_svd_ref_trainer(
+            model=model,
+            args=args,
+            train_dataset=prepared["train"],
+            eval_dataset=prepared["validation"],
+            processing_class=processor,
+            data_collator=default_data_collator,
+            compute_metrics=compute_metrics,
+            global_batch_size=global_batch_size,
+            adjust_lora_alpha_at=adjust_lora_alpha_at_list,
+            basic_alpha=lora_alpha,
+            min_alpha_ratio=min_alpha_ratio,
+            max_alpha_ratio=max_alpha_ratio,
+            repeat_n=repeat_n,
+            repeat_warmup_ratio=repeat_warmup_ratio,
+            repeat_decay_ratio=repeat_decay_ratio,
+            repeat_end_lr_rate=repeat_end_lr_rate,
+            final_warmup_ratio=final_warmup_ratio,
+            min_lr_rate=min_lr_rate,
+            repeat_decay_type=repeat_decay_type,
+            final_decay_type=final_decay_type,
+            warmup_start_lr_rate=warmup_start_lr_rate,
+            first_warmup_start_lr_rate=first_warmup_start_lr_rate,
+            last_epoch=last_epoch,
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=args,
+            train_dataset=prepared["train"],
+            eval_dataset=prepared["validation"],
+            processing_class=processor,
+            data_collator=default_data_collator,
+            compute_metrics=compute_metrics,
+        )
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     metrics = trainer.evaluate()

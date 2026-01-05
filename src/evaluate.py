@@ -1,5 +1,8 @@
 import os
 import contextlib
+import csv
+import datetime
+import json
 import logging
 from typing import Dict, Optional
 
@@ -121,6 +124,48 @@ def _maybe_load_classifier_from_adapter(model, model_path: str) -> bool:
     return True
 
 
+def _default_csv_path(model_path: str) -> str:
+    if model_path and os.path.isdir(model_path):
+        return os.path.join(model_path, "eval_results.csv")
+    return "eval_results.csv"
+
+
+def _rewrite_csv_with_extended_header(csv_path: str, fieldnames) -> None:
+    if not os.path.exists(csv_path):
+        return
+
+    with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        existing_rows = list(reader)
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in existing_rows:
+            writer.writerow(row)
+
+
+def _append_row_to_csv(csv_path: str, row: Dict[str, object]) -> None:
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+
+    if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            header_reader = csv.reader(f)
+            existing_header = next(header_reader, [])
+        fieldnames = list(dict.fromkeys(existing_header + [k for k in row.keys() if k not in existing_header]))
+        if fieldnames != existing_header:
+            _rewrite_csv_with_extended_header(csv_path, fieldnames)
+    else:
+        fieldnames = list(row.keys())
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writerow(row)
+
+
 def evaluate_model(
     model_path: str,
     dataset_name: str = "fw407/vtab-1k_cifar",
@@ -131,6 +176,7 @@ def evaluate_model(
     seed: int = 42,
     mixed_precision: Optional[str] = None,
     cache_dir: Optional[str] = None,
+    csv_path_dir: Optional[str] = "experiments",
 ) -> Dict[str, float]:
     set_seed(seed)
 
@@ -149,6 +195,7 @@ def evaluate_model(
 
     peft_adapter_config_path = os.path.join(model_path, "adapter_config.json")
     is_peft_adapter_dir = os.path.isdir(model_path) and os.path.isfile(peft_adapter_config_path)
+    peft_config = None
     if is_peft_adapter_dir:
         try:
             from peft import PeftConfig, PeftModel
@@ -234,6 +281,54 @@ def evaluate_model(
     results = metric.compute()
     if accelerator.is_main_process:
         accelerator.print(f"Test metrics: {results}")
+        resolved_csv_path = os.path.join(csv_path_dir,dataset_name.split("/")[-1], "eval_results.csv")
+
+        row: Dict[str, object] = {
+            "model_path": model_path.split("/")[-1],
+            "base_model": peft_config.base_model_name_or_path.split("/")[-1],
+            "dataset_name": dataset_name,
+            "batch_size": batch_size,
+            "seed": seed,
+        }
+
+        for k, v in results.items():
+            row[f"metric_{k}"] = v
+
+        if peft_config is not None:
+            try:
+                peft_dict = peft_config.to_dict()
+            except Exception:
+                peft_dict = {}
+
+            key_fields = (
+                "peft_type",
+                "task_type",
+                "base_model_name_or_path",
+                "inference_mode",
+                "r",
+                "lora_alpha",
+                "lora_dropout",
+                "target_modules",
+                "bias",
+                "modules_to_save",
+                "init_lora_weights",
+                "use_rslora",
+                "rank_pattern",
+                "alpha_pattern",
+            )
+            for k in key_fields:
+                if k in peft_dict:
+                    v = peft_dict[k]
+                    row[f"{k}"] = (
+                        json.dumps(v, ensure_ascii=False, default=str) if isinstance(v, (dict, list)) else v
+                    )
+
+            row["peft_config_path"] = peft_adapter_config_path
+            row["peft_config_json"] = json.dumps(peft_dict, ensure_ascii=False, sort_keys=True, default=str)
+
+        _append_row_to_csv(resolved_csv_path, row)
+        accelerator.print(f"Wrote evaluation row to CSV: {resolved_csv_path}")
+
     return results
 
 

@@ -4,6 +4,7 @@ import csv
 import datetime
 import json
 import logging
+import copy
 from typing import Dict, Optional
 
 import evaluate
@@ -13,6 +14,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoImageProcessor, AutoModelForImageClassification, set_seed
 
 from src.data import get_label_info, load_vtab_dataset, preprocess_splits, resolve_dataset_id
+from src.my_peft.examples.olora_finetuning.olora_finetuning import train
 
 
 class DataCollator:
@@ -166,24 +168,65 @@ def _append_row_to_csv(csv_path: str, row: Dict[str, object]) -> None:
         writer.writerow(row)
 
 
+def _make_peft_config_safe_for_inference(peft_config, accelerator: Optional[Accelerator] = None):
+    """
+    PEFT will re-run certain LoRA initialization schemes (e.g. `corda`, `eva`, `pissa`, `loftq`)
+    when loading an adapter. This is unnecessary for evaluation and can fail unless extra
+    preprocessing was done (e.g. `preprocess_corda`).
+
+    For evaluation we override the config passed to `PeftModel.from_pretrained` to disable those
+    init hooks; adapter weights are loaded right after module creation anyway.
+    """
+
+    cfg = copy.deepcopy(peft_config)
+    init = getattr(cfg, "init_lora_weights", None)
+    if isinstance(init, str):
+        init_lowered = init.strip().lower()
+        heavy_or_preprocess_inits = {"corda"}
+        if init_lowered in heavy_or_preprocess_inits:
+            if accelerator is not None and accelerator.is_main_process:
+                accelerator.print(
+                    f"Overriding PEFT `init_lora_weights={init!r}` -> True for evaluation-time adapter loading."
+                )
+            cfg.init_lora_weights = True
+            # PEFT's LoRA layer code may unconditionally `kwargs.update(lora_config.loftq_config)`,
+            # so ensure it is always a mapping (even if we're not using LoftQ during eval load).
+            if hasattr(cfg, "loftq_config") and getattr(cfg, "loftq_config") is None:
+                cfg.loftq_config = {}
+            for extra in ("corda_config", "eva_config"):
+                if hasattr(cfg, extra):
+                    setattr(cfg, extra, None)
+    return cfg
+
+def get_info_from_model_path(model_path: str):
+    info = model_path.split("/")[-1].split("_")
+    info_dict = {
+        "timestamp": info[-1],
+        "seed": int(info[-2][1:]),
+        "dataset_name": info[1],
+    }
+    if info[-3].startswith("sr#"):
+        info_dict["extra"] = info[-3]
+    else:
+        info_dict["extra"] = 'none'
+    return info_dict
+
 def evaluate_model(
     model_path: str,
-    dataset_name: str = "fw407/vtab-1k_cifar",
     test_split: str = "test",
     image_column: str = "img",
     label_column: str = "label",
     batch_size: int = 32,
-    seed: int = 42,
     mixed_precision: Optional[str] = None,
     cache_dir: Optional[str] = None,
     csv_path_dir: Optional[str] = "experiments",
 ) -> Dict[str, float]:
-    set_seed(seed)
+    info_dict = get_info_from_model_path(model_path)
+    set_seed(info_dict["seed"])
 
     accelerator = Accelerator(mixed_precision=mixed_precision or "no")
     accelerator.print(f"Running evaluation with {accelerator.num_processes} processes.")
-
-    dataset_id = resolve_dataset_id(dataset_name)
+    dataset_id = resolve_dataset_id(info_dict.get("dataset_name", ""))
     raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
     if test_split not in raw_dataset:
         raise ValueError(f"Split {test_split} not found in dataset {dataset_id}.")
@@ -205,6 +248,7 @@ def evaluate_model(
             ) from exc
 
         peft_config = PeftConfig.from_pretrained(model_path)
+        peft_config_for_load = _make_peft_config_safe_for_inference(peft_config, accelerator)
         base_model_name_or_path = peft_config.base_model_name_or_path
 
         adapter_num_labels = _infer_classifier_num_labels_from_adapter(model_path)
@@ -232,7 +276,7 @@ def evaluate_model(
                 ignore_mismatched_sizes=True,
                 cache_dir=cache_dir,
             )
-        model = PeftModel.from_pretrained(base_model, model_path)
+        model = PeftModel.from_pretrained(base_model, model_path, config=peft_config_for_load)
         classifier_loaded = _maybe_load_classifier_from_adapter(model, model_path)
         if classifier_loaded and accelerator.is_main_process:
             accelerator.print("Loaded saved classifier weights from adapter checkpoint (modules_to_save).")
@@ -281,18 +325,24 @@ def evaluate_model(
     results = metric.compute()
     if accelerator.is_main_process:
         accelerator.print(f"Test metrics: {results}")
-        resolved_csv_path = os.path.join(csv_path_dir,dataset_name.split("/")[-1], "eval_results.csv")
-
         row: Dict[str, object] = {
-            "model_path": model_path.split("/")[-1],
+            "timestamp": info_dict["timestamp"],
             "base_model": peft_config.base_model_name_or_path.split("/")[-1],
-            "dataset_name": dataset_name,
-            "batch_size": batch_size,
-            "seed": seed,
+            "dataset_name": dataset_id.split("_")[-1],
+            "init_lora_weights": getattr(peft_config, "init_lora_weights", None),
+            "extra": info_dict["extra"],
+            "seed": info_dict["seed"],
         }
+        
+        resolved_csv_path = os.path.join(csv_path_dir,row["dataset_name"],row["base_model"], "eval_results.csv")
+
+        if str(row["init_lora_weights"]).lower() == "true":
+            row["init_lora_weights"] = "kaiming"
 
         for k, v in results.items():
             row[f"metric_{k}"] = v
+
+        row["model_path"] =  model_path.split("/")[-1]
 
         if peft_config is not None:
             try:
@@ -301,20 +351,13 @@ def evaluate_model(
                 peft_dict = {}
 
             key_fields = (
-                "peft_type",
-                "task_type",
-                "base_model_name_or_path",
-                "inference_mode",
                 "r",
                 "lora_alpha",
                 "lora_dropout",
                 "target_modules",
                 "bias",
-                "modules_to_save",
-                "init_lora_weights",
+                "use_dora",
                 "use_rslora",
-                "rank_pattern",
-                "alpha_pattern",
             )
             for k in key_fields:
                 if k in peft_dict:
@@ -322,9 +365,6 @@ def evaluate_model(
                     row[f"{k}"] = (
                         json.dumps(v, ensure_ascii=False, default=str) if isinstance(v, (dict, list)) else v
                     )
-
-            row["peft_config_path"] = peft_adapter_config_path
-            row["peft_config_json"] = json.dumps(peft_dict, ensure_ascii=False, sort_keys=True, default=str)
 
         _append_row_to_csv(resolved_csv_path, row)
         accelerator.print(f"Wrote evaluation row to CSV: {resolved_csv_path}")

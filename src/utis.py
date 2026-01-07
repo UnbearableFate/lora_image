@@ -75,9 +75,9 @@ def build_wandb_project_run_tags(
         init_lora_weights_str = _slugify(init_lora_weights)
     key_parts: list[str] = [
         peft_variant,
+        f"{dataset_id.split('_')[-1]}",
         f"r{lora_r}",
         f"a{lora_alpha}",
-        f'lr{learning_rate}',
         f"{init_lora_weights_str}",
     ]
 
@@ -85,7 +85,9 @@ def build_wandb_project_run_tags(
         sr_info = f'sr#{repeat_n}rp'
         key_parts.append(sr_info)
     
-    key_parts.append(timestamp)
+    key_parts.append(f"s{seed}")
+    key_parts.append(str(timestamp))
+
     run_name = _truncate_with_hash("_".join(key_parts), max_len=128)
 
     tags: list[str] = [

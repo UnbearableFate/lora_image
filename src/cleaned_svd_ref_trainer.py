@@ -522,7 +522,7 @@ def get_cleaned_svd_ref_trainer(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
-        optimizer =(optimizer, lr_scheduler),
+        optimizers =(optimizer, lr_scheduler),
         adjust_lora_alpha_at=adjust_lora_alpha_at,
         basic_alpha=basic_alpha,
         min_alpha_ratio=min_alpha_ratio,

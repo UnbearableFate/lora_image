@@ -11,9 +11,9 @@
 set -euo pipefail
 
 DATASET="${DATASET:-fw407/vtab-1k_cifar}"
-MODEL_PATH="runs/qkv/lora_r16_a1_kaiming_20260105-051726"
+MODEL_PATH="runs/vtab-1k_cifar/dinov2-base/r16/lora_r16_a1_lr0.0001_olora_sr#3rp_s42_20260106-071422"
 SPLIT="${SPLIT:-test}"
-BATCH_SIZE="${BATCH_SIZE:-128}"
+BATCH_SIZE="${BATCH_SIZE:-512}"
 MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
 SEED="${SEED:-42}"
 CACHE_DIR="${CACHE_DIR:-}"

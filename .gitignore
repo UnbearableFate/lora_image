@@ -60,3 +60,5 @@ data/**
 !data/README.md
 
 runs
+experiments
+test**

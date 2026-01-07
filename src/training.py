@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Sequence, Union
 import evaluate
 import numpy as np
 from datasets import DatasetDict
+import torch
 from transformers import (
     AutoImageProcessor,
     AutoModelForImageClassification,
@@ -25,7 +26,7 @@ from src.utis import _maybe_enable_wandb, build_wandb_project_run_tags, init_cla
 def train(
     dataset_name: str = "fw407/vtab-1k_cifar",
     model_name: str = "google/vit-base-patch16-224-in21k",
-    output_dir: str = "outputs/vtab_trainer",
+    output_dir: str = "outputs",
     train_split: str = "train",
     eval_split: str = "validation",
     image_column: str = "img",
@@ -39,7 +40,7 @@ def train(
     modules_to_save: Optional[Sequence[str]] = ("classifier",),
     init_lora_weights: Union[bool, str, None] = True,
     init_num_samples: int = 512,
-    init_batch_size: int = 8,
+    init_batch_size: int = 16,
     init_seed: Optional[int] = None,
     corda_method: str = "kpm",
     loraga_direction: str = "ArB2r",
@@ -48,16 +49,17 @@ def train(
     weight_decay: float = 0.05,
     warmup_ratio: float = 0.05,
     num_train_epochs: float = 10.0,
+    max_steps: Optional[int] = None,
     global_batch_size: int = 32,
     per_device_batch_size: int = 4,
     eval_batch_size: Optional[int] = None,
     logging_steps: int = 50,
     eval_steps: int = 500,
     seed: int = 42,
-    use_wandb: bool = True,
-    wandb_online: bool = True,
+    use_wandb: bool = False,
+    wandb_online: bool = False,
     fp16: bool = False,
-    bfloat16: bool = False,
+    bfloat16: bool = True,
     gradient_checkpointing: bool = False,
     cache_dir: Optional[str] = None,
     resume_from_checkpoint: Optional[str] = None,
@@ -74,7 +76,7 @@ def train(
     min_lr_rate: float = 0.001,
     repeat_decay_type: str = "cosine",
     final_decay_type: str = "linear",
-    warmup_start_lr_rate: float = 0.001,
+    warmup_start_lr_rate: float = 0.1,
     first_warmup_start_lr_rate: float = 0.001,
     last_epoch: int = -1,
     timestamp: Optional[str] = None,
@@ -157,6 +159,14 @@ def train(
             adjust_lora_alpha_at=parsed_adjust_lora_alpha_at,
             timestamp=timestamp,
         )
+
+    if max_steps is not None:
+        if isinstance(max_steps, str):
+            max_steps = int(max_steps)
+        if max_steps <= 0:
+            raise ValueError("max_steps must be a positive integer when provided.")
+        tags = [tag for tag in tags if not tag.startswith("epochs=")]
+        tags.append(f"steps={max_steps}")
     
     if accelerator.is_main_process:   
         _maybe_enable_wandb(
@@ -193,6 +203,7 @@ def train(
         label2id=label2id,
         ignore_mismatched_sizes=True,
         cache_dir=cache_dir,
+        dtype= torch.bfloat16,
     )
     if gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -244,10 +255,12 @@ def train(
 
     assert global_batch_size % (per_device_batch_size * accelerator.num_processes) == 0, "global_batch_size must be divisible by per_device_batch_size * number of processes"
     gradient_accumulation_steps = global_batch_size // (per_device_batch_size * accelerator.num_processes) 
-    max_steps = math.ceil(num_train_epochs * len(prepared["train"]) / global_batch_size)
+    effective_max_steps = max_steps
+    if effective_max_steps is None:
+        effective_max_steps = math.ceil(num_train_epochs * len(prepared["train"]) / global_batch_size)
 
     args = TrainingArguments(
-        output_dir=os.path.join(output_dir, derived_run_name),
+        output_dir=os.path.join(output_dir,dataset_name.split("/")[-1],model_name.split("/")[-1],f"r{lora_r}", derived_run_name),
         remove_unused_columns=False,
         eval_strategy="steps",
         save_strategy="steps",
@@ -259,18 +272,21 @@ def train(
         warmup_ratio=warmup_ratio,
         per_device_train_batch_size=per_device_batch_size,
         per_device_eval_batch_size=eval_batch_size or per_device_batch_size,
-        max_steps=max_steps,
+        max_steps=effective_max_steps,
         gradient_accumulation_steps=gradient_accumulation_steps,
         report_to=["wandb"] if use_wandb else [],
         seed=seed,
-        dataloader_num_workers=4,
-        fp16=fp16,
-        bf16=bfloat16,
+        data_seed=seed,
+        bf16=True,
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         greater_is_better=True,
         push_to_hub=push_to_hub,
         save_total_limit=2,
+        dataloader_persistent_workers=True,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+        dataloader_num_workers=8,
     )
 
     if use_cleaned_svd_ref_trainer:

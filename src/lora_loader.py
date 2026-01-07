@@ -16,6 +16,11 @@ try:  # optional, only needed for init_lora_weights="eva"
 except Exception:  # pragma: no cover
     initialize_lora_eva_weights = None
 
+try:  # optional, only needed for init_lora_weights="eva"
+    from peft.tuners.lora.eva import forward_fn_dict as _peft_forward_fn_dict  # type: ignore
+except Exception:  # pragma: no cover
+    _peft_forward_fn_dict = None
+
 try:  # optional, only needed for init_lora_weights="corda" / "eva"
     from peft.tuners.lora.corda import preprocess_corda  # type: ignore
     from peft.tuners.lora.config import CordaConfig, EvaConfig  # type: ignore
@@ -237,7 +242,27 @@ def get_peft_model_with_eva(
 
     peft_model = get_peft_model(base_model, lora_cfg, low_cpu_mem_usage=True)
     print(f"Initializing Eva LoRA weights... with sub-dataset of size {len(sub_dataset)}")
-    initialize_lora_eva_weights(peft_model, dataloader)
+
+    def _forward_fn(model, model_input):
+        if isinstance(model_input, dict) and "labels" in model_input:
+            model_input = {k: v for k, v in model_input.items() if k != "labels"}
+        # prefer upstream's forward helper when available
+        if _peft_forward_fn_dict is not None:
+            return _peft_forward_fn_dict(model, model_input)
+        if isinstance(model_input, dict):
+            return model(**model_input)
+        return model(model_input)
+
+    # PEFT's default EVA input-prep assumes language modeling (`input_ids`); for vision batches (`pixel_values`)
+    # it raises KeyError. Passing `prepare_model_inputs_fn=None` uses the raw batch as hook context and lets EVA's
+    # default layer-input preparation handle the flattening.
+    initialize_lora_eva_weights(
+        peft_model,
+        dataloader,
+        forward_fn=_forward_fn,
+        prepare_model_inputs_fn=None,
+        prepare_layer_inputs_fn=None,
+    )
     return peft_model
 
 __all__ = [

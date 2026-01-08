@@ -199,7 +199,11 @@ def _make_peft_config_safe_for_inference(peft_config, accelerator: Optional[Acce
     return cfg
 
 def get_info_from_model_path(model_path: str):
-    info = model_path.split("/")[-1].split("_")
+    info = model_path.split("/")
+    if "checkpoint" in info[-1]:
+        info = info[-2].split("_")
+    else:
+        info = info[-1].split("_")
     info_dict = {
         "timestamp": info[-1],
         "seed": int(info[-2][1:]),

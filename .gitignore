@@ -60,5 +60,5 @@ data/**
 !data/README.md
 
 runs
-experiments
+**experiments**
 test**

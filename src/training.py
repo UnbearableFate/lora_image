@@ -59,7 +59,7 @@ def train(
     use_wandb: bool = False,
     wandb_online: bool = False,
     fp16: bool = False,
-    bfloat16: bool = True,
+    bf16: bool = False,
     gradient_checkpointing: bool = False,
     cache_dir: Optional[str] = None,
     resume_from_checkpoint: Optional[str] = None,
@@ -152,7 +152,7 @@ def train(
             logging_steps=logging_steps,
             seed=seed,
             fp16=fp16,
-            bfloat16=bfloat16,
+            bfloat16=bf16,
             gradient_checkpointing=gradient_checkpointing,
             use_cleaned_svd_ref_trainer=use_cleaned_svd_ref_trainer,
             repeat_n=repeat_n,
@@ -203,7 +203,7 @@ def train(
         label2id=label2id,
         ignore_mismatched_sizes=True,
         cache_dir=cache_dir,
-        dtype= torch.bfloat16,
+        dtype= torch.bfloat16 if bf16 else torch.float32,
     )
     if gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -277,7 +277,7 @@ def train(
         report_to=["wandb"] if use_wandb else [],
         seed=seed,
         data_seed=seed,
-        bf16=True,
+        bf16=bf16,
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         greater_is_better=True,
@@ -333,4 +333,6 @@ def train(
     metrics = trainer.evaluate()
     trainer.save_state()
     trainer.save_model()
-    return metrics
+    if accelerator.is_main_process:
+        print(f"TRAIN_OUTPUT_DIR\t{trainer.args.output_dir}", flush=True)
+    return trainer.args.output_dir

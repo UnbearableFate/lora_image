@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-MODELS_ROOT="outputs/dtd/dinov2-base/r16"
+MODELS_ROOT="outputs/cifar/dinov2-base/r16"
+CSV_PATH_DIR="final_experiments"
 
 usage() {
   cat >&2 <<'EOF'
@@ -35,7 +36,6 @@ SPLIT="${SPLIT:-test}"
 BATCH_SIZE="${BATCH_SIZE:-512}"
 MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
 CACHE_DIR="${CACHE_DIR:-}"
-CSV_PATH_DIR="${CSV_PATH_DIR:-experiments}"
 REQUIRE_ADAPTER="${REQUIRE_ADAPTER:-1}"
 
 DRY_RUN="${DRY_RUN:-0}"
@@ -85,5 +85,5 @@ run_eval() {
 
 for model_path in "${model_dirs[@]}"; do
   echo "==> Evaluating model_path: ${model_path}"
-  run_eval "${model_path}"
+  run_eval "${model_path}/checkpoint-500"
 done

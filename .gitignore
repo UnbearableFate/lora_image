@@ -62,3 +62,4 @@ data/**
 runs
 **experiments**
 test**
+**.sh.o**

@@ -11,6 +11,7 @@ import torch
 from transformers import (
     AutoImageProcessor,
     AutoModelForImageClassification,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
     default_data_collator,
@@ -22,6 +23,7 @@ from src.data import get_label_info, load_vtab_dataset, preprocess_splits, resol
 from src.lora_loader import LoraHyperparameters, VisionDataCollator, attach_lora_adapter, get_lora_config
 
 from src.utis import _maybe_enable_wandb, build_wandb_project_run_tags, init_classification_head
+from src.ema_trainer import EmaTrainer
 
 def train(
     dataset_name: str = "fw407/vtab-1k_cifar",
@@ -54,12 +56,12 @@ def train(
     per_device_batch_size: int = 4,
     eval_batch_size: Optional[int] = None,
     logging_steps: int = 50,
-    eval_steps: int = 500,
+    eval_steps: int = 600,
     seed: int = 42,
     use_wandb: bool = False,
     wandb_online: bool = False,
     fp16: bool = False,
-    bf16: bool = False,
+    bf16: bool = True,
     gradient_checkpointing: bool = False,
     cache_dir: Optional[str] = None,
     resume_from_checkpoint: Optional[str] = None,
@@ -80,6 +82,9 @@ def train(
     first_warmup_start_lr_rate: float = 0.001,
     last_epoch: int = -1,
     timestamp: Optional[str] = None,
+    no_eval: bool = False,
+    ema_update_after_step: int = 10000,
+    ema_decay: float = 0.995,
 ) -> Dict[str, float]:
     print("Starting training with the following parameters:")
     accelerator = Accelerator()
@@ -204,6 +209,7 @@ def train(
         ignore_mismatched_sizes=True,
         cache_dir=cache_dir,
         dtype= torch.bfloat16 if bf16 else torch.float32,
+        attn_implementation="flash_attention_2",
     )
     if gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -259,13 +265,15 @@ def train(
     if effective_max_steps is None:
         effective_max_steps = math.ceil(num_train_epochs * len(prepared["train"]) / global_batch_size)
 
+    no_eval = no_eval or (eval_steps > effective_max_steps)
+
     args = TrainingArguments(
         output_dir=os.path.join(output_dir,dataset_name.split("/")[-1],model_name.split("/")[-1],f"r{lora_r}", derived_run_name),
         remove_unused_columns=False,
         eval_strategy="steps",
         save_strategy="steps",
-        eval_steps=eval_steps,
-        save_steps=eval_steps,
+        eval_steps=eval_steps if not no_eval else None,
+        save_steps=eval_steps if not no_eval else None,
         logging_steps=logging_steps,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
@@ -278,11 +286,11 @@ def train(
         seed=seed,
         data_seed=seed,
         bf16=bf16,
-        load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-        greater_is_better=True,
+        load_best_model_at_end= not no_eval,
+        metric_for_best_model="accuracy" if not no_eval else None,
+        greater_is_better=True if not no_eval else None,
         push_to_hub=push_to_hub,
-        save_total_limit=2,
+        save_total_limit=2 if not no_eval else None,
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True,
         dataloader_prefetch_factor=2,
@@ -297,10 +305,10 @@ def train(
             model=model,
             args=args,
             train_dataset=prepared["train"],
-            eval_dataset=prepared["validation"],
+            eval_dataset=prepared["validation"] if not no_eval else None,
             processing_class=processor,
             data_collator=default_data_collator,
-            compute_metrics=compute_metrics,
+            compute_metrics=compute_metrics if not no_eval else None,
             global_batch_size=global_batch_size,
             adjust_lora_alpha_at=adjust_lora_alpha_at_list,
             basic_alpha=lora_alpha,
@@ -317,20 +325,23 @@ def train(
             warmup_start_lr_rate=warmup_start_lr_rate,
             first_warmup_start_lr_rate=first_warmup_start_lr_rate,
             last_epoch=last_epoch,
+            ema_update_after_step=ema_update_after_step,
+            ema_decay=ema_decay,
         )
     else:
-        trainer = Trainer(
+        trainer = EmaTrainer(
             model=model,
             args=args,
             train_dataset=prepared["train"],
-            eval_dataset=prepared["validation"],
+            eval_dataset=prepared["validation"] if not no_eval else None,
             processing_class=processor,
             data_collator=default_data_collator,
-            compute_metrics=compute_metrics,
+            compute_metrics=compute_metrics if not no_eval else None,
+            ema_update_after_step=ema_update_after_step,
+            ema_decay=ema_decay,
         )
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    metrics = trainer.evaluate()
     trainer.save_state()
     trainer.save_model()
     if accelerator.is_main_process:

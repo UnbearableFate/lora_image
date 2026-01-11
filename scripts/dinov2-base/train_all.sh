@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Recommended Accelerate launch for ViT-L/16 @384 with standard LoRA on VTAB-1K CIFAR.
-# Adjust NUM_PROCS, dataset, and logging as needed.
+#!/bin/bash
+#PBS -q short-g
+#PBS -W group_list=xg24i002
+#PBS -l select=1:mpiprocs=1
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -m abe
 
 set -euo pipefail
 

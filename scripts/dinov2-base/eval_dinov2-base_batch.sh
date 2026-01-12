@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
-MODELS_ROOT="outputs/cifar/dinov2-base/r16"
+MODELS_ROOT="test_out2/caltech101/dinov2-large/r16"
 CSV_PATH_DIR="final_experiments"
+PYTHON_BINARY="/work/xg24i002/x10041/lora-ns/.venv/bin/python"
 
 usage() {
   cat >&2 <<'EOF'
@@ -43,7 +44,6 @@ DRY_RUN="${DRY_RUN:-0}"
 ACCELERATE_CONFIG_FILE="${ACCELERATE_CONFIG_FILE:-${REPO_ROOT}/accelerate_config/local_config.yaml}"
 export ACCELERATE_CONFIG_FILE
 
-PYTHON_BINARY="${PYTHON_BINARY:-/home/yu/peft_playground/.venv/bin/python}"
 
 mapfile -d '' -t model_dirs < <(find "${MODELS_ROOT}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
@@ -85,5 +85,5 @@ run_eval() {
 
 for model_path in "${model_dirs[@]}"; do
   echo "==> Evaluating model_path: ${model_path}"
-  run_eval "${model_path}/checkpoint-500"
+  run_eval "${model_path}"
 done

@@ -63,3 +63,6 @@ runs
 **experiments**
 test**
 **.sh.o**
+**outputs**
+**log**
+data_cache/

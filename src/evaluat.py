@@ -182,7 +182,7 @@ def _make_peft_config_safe_for_inference(peft_config, accelerator: Optional[Acce
     init = getattr(cfg, "init_lora_weights", None)
     if isinstance(init, str):
         init_lowered = init.strip().lower()
-        heavy_or_preprocess_inits = {"corda"}
+        heavy_or_preprocess_inits = {"corda" , "lora_ga"}
         if init_lowered in heavy_or_preprocess_inits:
             if accelerator is not None and accelerator.is_main_process:
                 accelerator.print(
@@ -250,7 +250,6 @@ def evaluate_model(
             raise ImportError(
                 "Evaluating a PEFT adapter requires `peft` to be installed."
             ) from exc
-
         peft_config = PeftConfig.from_pretrained(model_path)
         peft_config_for_load = _make_peft_config_safe_for_inference(peft_config, accelerator)
         base_model_name_or_path = peft_config.base_model_name_or_path

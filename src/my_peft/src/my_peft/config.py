@@ -18,6 +18,7 @@ import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Optional, Union
 
+import torch
 from huggingface_hub import hf_hub_download
 from transformers.utils import PushToHubMixin
 
@@ -65,10 +66,19 @@ class PeftConfigMixin(PushToHubMixin):
         auto_mapping_dict = kwargs.pop("auto_mapping_dict", None)
 
         output_dict = self.to_dict()
-        # converting set type to list
-        for key, value in output_dict.items():
+        # Normalize non-JSON-serializable types.
+        def _json_safe(value):
             if isinstance(value, set):
-                output_dict[key] = list(value)
+                return [_json_safe(v) for v in value]
+            if isinstance(value, dict):
+                return {k: _json_safe(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_json_safe(v) for v in value]
+            if isinstance(value, torch.dtype):
+                return str(value).replace("torch.", "")
+            return value
+
+        output_dict = _json_safe(output_dict)
 
         output_path = os.path.join(save_directory, CONFIG_NAME)
 

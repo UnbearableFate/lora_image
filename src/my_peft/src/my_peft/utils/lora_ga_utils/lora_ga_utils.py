@@ -117,19 +117,40 @@ def estimate_gradient(
     """
     print(f"start estimate gradient, model device: {model.device}")
 
+    def _infer_batch_size(batch):
+        if isinstance(batch, dict):
+            if "input_ids" in batch:
+                return len(batch["input_ids"])
+            for value in batch.values():
+                if hasattr(value, "shape") and len(value.shape) > 0:
+                    return value.shape[0]
+                try:
+                    return len(value)
+                except TypeError:
+                    continue
+            return None
+        try:
+            return len(batch)
+        except TypeError:
+            return None
+
     for batch in tqdm(dataloader, desc="Estimating gradient"):
-        print(f"batch_size=", len(batch["input_ids"]))
-        print("before forward===========================================================")
-        show_gpu_and_cpu_memory()
+        batch_size = _infer_batch_size(batch)
+        if batch_size is not None:
+            print("batch_size=", batch_size)
+        else:
+            print("batch_size=unknown")
+        #print("before forward===========================================================")
+        #show_gpu_and_cpu_memory()
         num_batch += 1
         batch = {k: v for k, v in batch.items()}
         outputs = model(**batch)
-        show_gpu_and_cpu_memory()
-        print("before backward===========================================")
-        show_gpu_and_cpu_memory()
+        #show_gpu_and_cpu_memory()
+        #print("before backward===========================================")
+        #show_gpu_and_cpu_memory()
         outputs.loss.backward()
-        print("after backward ===========================================================")
-        show_gpu_and_cpu_memory()
+        #print("after backward ===========================================================")
+        #show_gpu_and_cpu_memory()
 
         get_record_gradient_hook(model, named_grads)(None)  # get gradient of last layer
         # make sure the gradient is cleared
@@ -146,7 +167,17 @@ def estimate_gradient(
             processed_gradient = processed_gradient.to(accelerator.device)
             dist.all_reduce(processed_gradient, op=dist.ReduceOp.AVG)
             named_grads[name] = processed_gradient.to("cpu")
-    named_grads = {".".join(k.split(".")[:-1]): v for k, v in named_grads.items()}
+    collapsed_grads = {}
+    for name, grad in named_grads.items():
+        parts = name.split(".")
+        base_key = ".".join(parts[:-1])
+        suffix = parts[-1] if parts else name
+        # Prefer weight gradients when both weight and bias map to the same module key.
+        if base_key not in collapsed_grads or suffix == "weight":
+            collapsed_grads[base_key] = grad
+        elif collapsed_grads[base_key] is not None and collapsed_grads[base_key].dim() < 2 and grad.dim() >= 2:
+            collapsed_grads[base_key] = grad
+    named_grads = collapsed_grads
 
     if grad_save_path is not None:
         if accelerator and accelerator.num_processes > 1:

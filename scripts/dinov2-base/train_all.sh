@@ -65,7 +65,6 @@ for dataset in "${DATASETS[@]}"; do
         --target_modules query,key,value,dense \
         --peft_variant lora \
         --init_lora_weights "${init_lora_weights}" \
-        --logging_steps 10 \
         --eval_steps 20
     done
 

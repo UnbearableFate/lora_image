@@ -82,7 +82,7 @@ def train(
     first_warmup_start_lr_rate: float = 0.001,
     last_epoch: int = -1,
     timestamp: Optional[str] = None,
-    no_eval: bool = False,
+    skip_eval: bool = False,
     ema_update_after_step: int = 10000,
     ema_decay: float = 0.995,
 ) -> Dict[str, float]:
@@ -265,15 +265,15 @@ def train(
     if effective_max_steps is None:
         effective_max_steps = math.ceil(num_train_epochs * len(prepared["train"]) / global_batch_size)
 
-    no_eval = no_eval or (eval_steps > effective_max_steps)
+    skip_eval = skip_eval or (eval_steps > effective_max_steps)
 
     args = TrainingArguments(
         output_dir=os.path.join(output_dir,dataset_name.split("/")[-1],model_name.split("/")[-1],f"r{lora_r}", derived_run_name),
         remove_unused_columns=False,
-        eval_strategy="steps",
-        save_strategy="steps",
-        eval_steps=eval_steps if not no_eval else None,
-        save_steps=eval_steps if not no_eval else None,
+        eval_strategy="steps" if not skip_eval else "no",
+        save_strategy="steps" if not skip_eval else "no",
+        eval_steps=eval_steps if not skip_eval else None,
+        save_steps=eval_steps if not skip_eval else None,
         logging_steps=logging_steps,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
@@ -286,11 +286,11 @@ def train(
         seed=seed,
         data_seed=seed,
         bf16=bf16,
-        load_best_model_at_end= not no_eval,
-        metric_for_best_model="accuracy" if not no_eval else None,
-        greater_is_better=True if not no_eval else None,
+        load_best_model_at_end= not skip_eval,
+        metric_for_best_model="accuracy" if not skip_eval else None,
+        greater_is_better=True if not skip_eval else None,
         push_to_hub=push_to_hub,
-        save_total_limit=2 if not no_eval else None,
+        save_total_limit=2 if not skip_eval else None,
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True,
         dataloader_prefetch_factor=2,
@@ -305,10 +305,10 @@ def train(
             model=model,
             args=args,
             train_dataset=prepared["train"],
-            eval_dataset=prepared["validation"] if not no_eval else None,
+            eval_dataset=prepared["validation"] if not skip_eval else None,
             processing_class=processor,
             data_collator=default_data_collator,
-            compute_metrics=compute_metrics if not no_eval else None,
+            compute_metrics=compute_metrics if not skip_eval else None,
             global_batch_size=global_batch_size,
             adjust_lora_alpha_at=adjust_lora_alpha_at_list,
             basic_alpha=lora_alpha,
@@ -325,25 +325,31 @@ def train(
             warmup_start_lr_rate=warmup_start_lr_rate,
             first_warmup_start_lr_rate=first_warmup_start_lr_rate,
             last_epoch=last_epoch,
-            ema_update_after_step=ema_update_after_step,
-            ema_decay=ema_decay,
         )
     else:
-        trainer = EmaTrainer(
+        trainer = Trainer(
             model=model,
             args=args,
             train_dataset=prepared["train"],
-            eval_dataset=prepared["validation"] if not no_eval else None,
+            eval_dataset=prepared["validation"] if not skip_eval else None,
             processing_class=processor,
             data_collator=default_data_collator,
-            compute_metrics=compute_metrics if not no_eval else None,
-            ema_update_after_step=ema_update_after_step,
-            ema_decay=ema_decay,
+            compute_metrics=compute_metrics if not skip_eval else None,
         )
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.save_state()
     trainer.save_model()
+    if accelerator.is_main_process:
+        output_dir = trainer.args.output_dir
+        adapter_safetensors = os.path.join(output_dir, "adapter_model.safetensors")
+        adapter_bin = os.path.join(output_dir, "adapter_model.bin")
+        if not (os.path.exists(adapter_safetensors) or os.path.exists(adapter_bin)):
+            save_model = trainer.model
+            if hasattr(trainer, "accelerator"):
+                save_model = trainer.accelerator.unwrap_model(trainer.model)
+            if hasattr(save_model, "save_pretrained"):
+                save_model.save_pretrained(output_dir)
     if accelerator.is_main_process:
         print(f"TRAIN_OUTPUT_DIR\t{trainer.args.output_dir}", flush=True)
     return trainer.args.output_dir

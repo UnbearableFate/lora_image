@@ -132,7 +132,7 @@ def iter_lora_factors_with_names(model: nn.Module):
                 yield module_name, name, module.lora_B[name].weight, module.lora_A[name].weight
 
 
-class DistributedSvdRefactorTrainer(EmaTrainer):
+class DistributedSvdRefactorTrainer(Trainer):
     """
     使用分布式低秩 SVD 重构 LoRA 因子，并在重构后清空 Adam moments。
     """

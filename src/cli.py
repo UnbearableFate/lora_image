@@ -1,6 +1,6 @@
 import fire
 
-from src.evaluate import evaluate_model
+from src.evaluat import evaluate_model
 from src.training import train
 
 

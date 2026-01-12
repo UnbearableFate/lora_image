@@ -207,7 +207,6 @@ def get_info_from_model_path(model_path: str):
     info_dict = {
         "timestamp": info[-1],
         "seed": int(info[-2][1:]),
-        "dataset_name": info[1],
     }
     if info[-3].startswith("sr#"):
         info_dict["extra"] = info[-3]
@@ -221,6 +220,7 @@ def evaluate_model(
     image_column: str = "img",
     label_column: str = "label",
     batch_size: int = 32,
+    dataset_name: Optional[str] = None,
     mixed_precision: Optional[str] = None,
     cache_dir: Optional[str] = None,
     csv_path_dir: Optional[str] = "experiments",
@@ -230,7 +230,7 @@ def evaluate_model(
 
     accelerator = Accelerator(mixed_precision=mixed_precision or "no")
     accelerator.print(f"Running evaluation with {accelerator.num_processes} processes.")
-    dataset_id = resolve_dataset_id(info_dict.get("dataset_name", ""))
+    dataset_id = resolve_dataset_id(dataset_name)
     raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
     if test_split not in raw_dataset:
         raise ValueError(f"Split {test_split} not found in dataset {dataset_id}.")
@@ -331,7 +331,7 @@ def evaluate_model(
         row: Dict[str, object] = {
             "timestamp": info_dict["timestamp"],
             "base_model": peft_config.base_model_name_or_path.split("/")[-1],
-            "dataset_name": dataset_id.split("_")[-1],
+            "dataset_name": dataset_name,
             "init_lora_weights": getattr(peft_config, "init_lora_weights", None),
             "extra": info_dict["extra"],
             "seed": info_dict["seed"],

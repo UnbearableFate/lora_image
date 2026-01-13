@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import glob
 import os
 import statistics
 from dataclasses import dataclass
@@ -19,11 +18,7 @@ class AggregateSpec:
 def _expand_inputs(inputs: list[str]) -> list[str]:
     paths: list[str] = []
     for item in inputs:
-        matches = glob.glob(item)
-        if matches:
-            paths.extend(matches)
-        else:
-            paths.append(item)
+        paths.append(item)
     deduped: list[str] = []
     seen: set[str] = set()
     for path in paths:
@@ -32,6 +27,31 @@ def _expand_inputs(inputs: list[str]) -> list[str]:
             seen.add(norm)
             deduped.append(norm)
     return deduped
+
+
+def _collect_results_csv(roots: list[str]) -> list[str]:
+    candidates = _expand_inputs(roots)
+    collected: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if os.path.isdir(item):
+            for root, _, files in os.walk(item):
+                for filename in files:
+                    if filename.endswith("results.csv"):
+                        path = os.path.normpath(os.path.join(root, filename))
+                        if path not in seen:
+                            seen.add(path)
+                            collected.append(path)
+        elif os.path.isfile(item):
+            if os.path.basename(item).endswith("results.csv"):
+                path = os.path.normpath(item)
+                if path not in seen:
+                    seen.add(path)
+                    collected.append(path)
+        else:
+            raise ValueError(f"Input path does not exist: {item}")
+    print(f"Found {collected} *results.csv files.")
+    return collected
 
 
 def _read_rows(paths: Iterable[str]) -> list[dict[str, str]]:
@@ -100,15 +120,15 @@ def _write_csv(path: str, rows: list[dict[str, str]]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Aggregate eval_results.csv across different seeds by grouping on config columns, "
+            "Aggregate *results.csv files across different seeds by grouping on config columns, "
             "then computing mean/std for metric_accuracy."
         )
     )
     parser.add_argument(
-        "--inputs",
+        "--roots",
         nargs="+",
         required=True,
-        help="One or more CSV paths or glob patterns (e.g. experiments/*/*/eval_results.csv).",
+        help="One or more root paths to search recursively for *results.csv files.",
     )
     parser.add_argument(
         "--out",
@@ -135,21 +155,23 @@ def main() -> None:
         metric_column=args.metric_col.strip(),
     )
 
-    paths = _expand_inputs(args.inputs)
+    paths = _collect_results_csv(args.roots)
     if not paths:
-        raise ValueError("No input files found after glob expansion.")
-    if args.out:
-        out_path = args.out
-    else:
-        first = paths[0]
-        first_dir = os.path.dirname(os.path.abspath(first))
-        first_stem = os.path.splitext(os.path.basename(first))[0]
-        out_path = os.path.join(first_dir, f"{first_stem}_avg.csv")
-    rows = _read_rows(paths)
-    out_rows = aggregate(rows, spec)
+        raise ValueError("No *results.csv files found under the given root path(s).")
+    for path in paths:
+        print(f"Found results CSV: {path}")
+        if args.out:
+            out_path = args.out
+        else:
+            first = path
+            first_dir = os.path.dirname(os.path.abspath(first))
+            first_stem = os.path.splitext(os.path.basename(first))[0]
+            out_path = os.path.join(first_dir, f"{first_stem}_avg.csv")
+        rows = _read_rows([path])
+        out_rows = aggregate(rows, spec)
 
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
-    _write_csv(out_path, out_rows)
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+        _write_csv(out_path, out_rows)
 
 
 if __name__ == "__main__":

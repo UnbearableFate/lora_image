@@ -142,6 +142,7 @@ for seed in "${SEEDS[@]}"; do
   eval_args=(
     -m src.cli evaluate
     --model_path "${model_path}"
+    --dataset_name "${dataset}"
     --test_split "${SPLIT}"
     --image_column img
     --label_column label

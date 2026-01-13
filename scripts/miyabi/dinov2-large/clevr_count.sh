@@ -143,6 +143,7 @@ for seed in "${SEEDS[@]}"; do
     -m src.cli evaluate
     --model_path "${model_path}"
     --dataset_name "${dataset}"
+    --dataset_name "${dataset}"
     --image_column img
     --label_column label
     --batch_size "${BATCH_SIZE}"

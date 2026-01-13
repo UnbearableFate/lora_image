@@ -55,28 +55,6 @@ dataset="clevr_count"
 for seed in "${SEEDS[@]}"; do
   
 
-    model_path="$(awk -F'\t' '/^TRAIN_OUTPUT_DIR\t/ {print $2}' "${train_log}" | tail -n 1)"
-    if [[ -z "${model_path}" ]]; then
-      echo "Error: failed to parse TRAIN_OUTPUT_DIR from log: ${train_log}" >&2
-      exit 1
-    fi
-
-    eval_args=(
-      -m src.cli evaluate
-      --model_path "${model_path}"
-      --dataset_name "${dataset}"
-      --test_split "${SPLIT}"
-      --image_column img
-      --label_column label
-      --batch_size "${BATCH_SIZE}"
-      --mixed_precision "${MIXED_PRECISION}"
-      --csv_path_dir "${CSV_PATH_DIR}"
-    )
-    if [[ -n "${CACHE_DIR}" ]]; then
-      eval_args+=(--cache_dir "${CACHE_DIR}")
-    fi
-    "${PYTHON_BINARY}" "${eval_args[@]}"
-  done
 
   timestamp="$(date +%Y%m%d%H%M%S)"
   echo "==> Training ${dataset} with n=8, seed=${seed}, timestamp=${timestamp}"
@@ -116,6 +94,7 @@ for seed in "${SEEDS[@]}"; do
   eval_args=(
     -m src.cli evaluate
     --model_path "${model_path}"
+    --dataset_name "${dataset}"
     --dataset_name "${dataset}"
     --image_column img
     --label_column label

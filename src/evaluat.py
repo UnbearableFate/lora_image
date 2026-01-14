@@ -14,8 +14,6 @@ from torch.utils.data import DataLoader
 from transformers import AutoImageProcessor, AutoModelForImageClassification, set_seed
 
 from src.data import get_label_info, load_vtab_dataset, preprocess_splits, resolve_dataset_id
-from src.my_peft.examples.olora_finetuning.olora_finetuning import train
-
 
 class DataCollator:
     def __call__(self, features):

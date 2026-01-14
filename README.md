@@ -36,9 +36,25 @@ python -m src.cli train \
 You can pass either a full HF dataset id or these aliases:
 - `caltech101`, `cifar`, `dtd`, `flowers102`, `pets`, `svhn`, `sun397`, `patch_camelyon`, `eurosat`, `resisc45`, `retinopathy`, `clevr_count`, `clevr_distance`, `dsprites_location`, `dsprites_orientation`, `smallnorb_azimuth`, `smallnorb_elevation`, `kitti_distance`
 
+## MedMNIST-v2
+This repo also supports the Hugging Face dataset `albertvillanova/medmnist-v2`, which is a *multi-config* dataset.
+
+- Recommended spec format: `medmnist-v2:<task>` (alias for `albertvillanova/medmnist-v2:<task>`)
+- Example task: `pathmnist`, `pneumoniamnist`, `dermamnist`, ...
+- This repo loads MedMNIST-v2 tasks via the `medmnist` Python package (see `requirements.txt`), instead of Hugging Face dataset scripts.
+- MedMNIST+ larger images: append `@<size>` to the task, e.g. `medmnist-v2:chestmnist@224`. If omitted, the `medmnist` fallback defaults to `224`.
+
+Example:
+```
+python -m src.cli train \
+  --dataset_name medmnist-v2:pathmnist \
+  --model_name google/vit-base-patch16-224-in21k \
+  --output_dir runs/medmnist_pathmnist
+```
+
 ## Notes
 - Training uses `transformers.Trainer` (distributed via Accelerate) with `evaluate` for validation accuracy.
 - LoRA applied via `peft`; base weights are frozen by default.
 - W&B logging is enabled by default; runs without a key go to offline mode to avoid failures.
-- Test evaluation is provided separately in `src/evaluate.py` (Accelerate DDP).
-- The code assumes VTAB datasets expose `image` and `label` columns plus `train`/`validation`/`test` splits; override via CLI if needed.
+- Test evaluation is provided separately in `src/evaluat.py` (Accelerate DDP).
+- VTAB datasets use `img`/`label` columns; MedMNIST-v2 uses `image`/`label` and requires running dataset loading code (`trust_remote_code=True`), which this repo enables automatically for that dataset.

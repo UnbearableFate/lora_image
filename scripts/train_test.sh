@@ -8,21 +8,13 @@
 
 set -euo pipefail
 
-cd /work/xg24i002/x10041/lora_image
-
-DATASET="caltech101"
-MODEL_NAME="facebook/dinov2-large"
+DATASET="medmnist-v2:breastmnist"
+MODEL_NAME="google/vit-base-patch16-224"
 
 ACCELERATE_CONFIG_FILE="${ACCELERATE_CONFIG_FILE:-lora_image/accelerate_config/local_config.yaml}"
 export ACCELERATE_CONFIG_FILE
-PYTHON_BINARY="${PYTHON_BINARY:-/work/xg24i002/x10041/lora-ns/.venv/bin/python}"
-# Ensure workspace code has priority over site-packages.
-#export PYTHONPATH="/work/xg24i002/x10041/lora_image/src:${PYTHONPATH:-}"
 
-SPLIT="${SPLIT:-test}"
-BATCH_SIZE="${BATCH_SIZE:-512}"
-MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
-CACHE_DIR="${CACHE_DIR:-}"
+
 CSV_PATH_DIR="${CSV_PATH_DIR:-test_experiments}"
 
 TRAIN_LOG_DIR="${TRAIN_LOG_DIR:-train_logs}"
@@ -37,9 +29,9 @@ for seed in "${SEEDS[@]}"; do
 
   dataset_safe="${DATASET//\//_}"
   train_log="${TRAIN_LOG_DIR}/train_${dataset_safe}_s${seed}_${timestamp}.log"
-  "${PYTHON_BINARY}" -m src.cli train \
+  python -m src.cli train \
     --timestamp "${timestamp}" \
-    --output_dir "test_out2" \
+    --output_dir "medmnist-test" \
     --dataset_name "${DATASET}" \
     --model_name "${MODEL_NAME}" \
     --seed "${seed}" \
@@ -58,7 +50,11 @@ for seed in "${SEEDS[@]}"; do
     --init_lora_weights lora_ga \
     --logging_steps 10 \
     --init_num_samples 512 \
-    --skip_eval \
+    --eval_steps 25 \
+    --eval_batch_size 512 \
+    --use_wandb \
+    --wandb_online \
+    --logging_steps 10 \
     2>&1 | tee "${train_log}"
 
   model_path="$(awk -F'\t' '/^TRAIN_OUTPUT_DIR\t/ {print $2}' "${train_log}" | tail -n 1)"
@@ -70,15 +66,13 @@ for seed in "${SEEDS[@]}"; do
   eval_args=(
     -m src.cli evaluate
     --model_path "${model_path}"
-    --test_split "${SPLIT}"
+    --dataset_name "${DATASET}"
+    --test_split "test"
     --image_column img
     --label_column label
-    --batch_size "${BATCH_SIZE}"
-    --mixed_precision "${MIXED_PRECISION}"
+    --batch_size 256
+    --mixed_precision "bf16"
     --csv_path_dir "${CSV_PATH_DIR}"
   )
-  if [[ -n "${CACHE_DIR}" ]]; then
-    eval_args+=(--cache_dir "${CACHE_DIR}")
-  fi
-  "${PYTHON_BINARY}" "${eval_args[@]}"
+  python "${eval_args[@]}"
 done

@@ -26,8 +26,7 @@ TRAIN_LOG_DIR="${TRAIN_LOG_DIR:-train_logs}"
 mkdir -p "${TRAIN_LOG_DIR}"
 
 # 5 two-digit primes as a deterministic "random seed table" for 5 repeated runs.
-SEEDS=(11 23 37 47 53)
-init_lora_weights_list=("eva" "corda" "lora_ga" "gaussian" "true" "olora" "pissa" "orthogonal" )
+SEEDS=(11)
 
 # DATASETS=(
 #   "cifar"
@@ -55,10 +54,10 @@ dataset="cifar"
 for seed in "${SEEDS[@]}"; do
   
   timestamp="$(date +%Y%m%d%H%M%S)"
-  echo "==> Training ${dataset} with n=8, seed=${seed}, timestamp=${timestamp}"
+  echo "==> Training ${dataset} with n=1, seed=${seed}, timestamp=${timestamp}"
 
   dataset_safe="${dataset//\//_}"
-  train_log="${TRAIN_LOG_DIR}/train_${timestamp}_${dataset_safe}_s${seed}_n8.log"
+  train_log="${TRAIN_LOG_DIR}/train_${timestamp}_${dataset_safe}_s${seed}_n1.log"
   "${PYTHON_BINARY}" -m src.cli train \
     --timestamp "${timestamp}" \
     --output_dir "outputs_ours" \
@@ -80,7 +79,6 @@ for seed in "${SEEDS[@]}"; do
     --init_lora_weights "gaussian" \
     --use_cleaned_svd_ref_trainer \
     --repeat_n 8 \
-    --skip_eval \
     2>&1 | tee "${train_log}"
 
   model_path="$(awk -F'\t' '/^TRAIN_OUTPUT_DIR\t/ {print $2}' "${train_log}" | tail -n 1)"
@@ -105,3 +103,10 @@ for seed in "${SEEDS[@]}"; do
   fi
   "${PYTHON_BINARY}" "${eval_args[@]}"
 done
+
+#  --eval_steps 25 \
+#     --eval_split "test" \
+#     --eval_batch_size 1024 \
+#     --use_wandb \
+#     --wandb_online \
+#     --logging_steps 10 \

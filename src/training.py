@@ -286,7 +286,7 @@ def train(
         seed=seed,
         data_seed=seed,
         bf16=bf16,
-        load_best_model_at_end= not skip_eval,
+        load_best_model_at_end=False,
         metric_for_best_model="accuracy" if not skip_eval else None,
         greater_is_better=True if not skip_eval else None,
         push_to_hub=push_to_hub,

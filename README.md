@@ -39,7 +39,7 @@ You can pass either a full HF dataset id or these aliases:
 ## MedMNIST-v2
 This repo also supports the Hugging Face dataset `albertvillanova/medmnist-v2`, which is a *multi-config* dataset.
 
-- Recommended spec format: `medmnist-v2:<task>` (alias for `albertvillanova/medmnist-v2:<task>`)
+- Recommended spec format: `medmnist:<task>` (alias for `medmnist-v2:<task>`)
 - Example task: `pathmnist`, `pneumoniamnist`, `dermamnist`, ...
 - This repo loads MedMNIST-v2 tasks via the `medmnist` Python package (see `requirements.txt`), instead of Hugging Face dataset scripts.
 - MedMNIST+ larger images: append `@<size>` to the task, e.g. `medmnist-v2:chestmnist@224`. If omitted, the `medmnist` fallback defaults to `224`.

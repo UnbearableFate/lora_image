@@ -19,7 +19,15 @@ from transformers import (
 )
 from accelerate import Accelerator
 
-from src.data import get_label_info, load_vtab_dataset, preprocess_splits, resolve_dataset_id
+from src.data import (
+    VTAB_ALIASES,
+    get_label_info,
+    is_medmnist_dataset_name,
+    load_medmnist_dataset,
+    load_vtab_dataset,
+    preprocess_splits,
+    resolve_dataset_id,
+)
 from src.lora_loader import LoraHyperparameters, VisionDataCollator, attach_lora_adapter, get_lora_config
 
 from src.utis import _maybe_enable_wandb, build_wandb_project_run_tags, init_classification_head
@@ -48,6 +56,7 @@ def train(
     loraga_direction: str = "ArB2r",
     lora_cache_dir: str = "data_cache",
     learning_rate: float = 5e-4,
+    lr_scheduler_type: str = "cosine",
     weight_decay: float = 0.05,
     warmup_ratio: float = 0.05,
     num_train_epochs: float = 10.0,
@@ -76,8 +85,6 @@ def train(
     repeat_end_lr_rate: float = 0.97,
     final_warmup_ratio: float = 0.03,
     min_lr_rate: float = 0.001,
-    repeat_decay_type: str = "cosine",
-    final_decay_type: str = "linear",
     warmup_start_lr_rate: float = 0.1,
     first_warmup_start_lr_rate: float = 0.001,
     last_epoch: int = -1,
@@ -91,7 +98,8 @@ def train(
     set_seed(seed)
     timestamp = timestamp or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    dataset_id = resolve_dataset_id(dataset_name)
+    is_medmnist = is_medmnist_dataset_name(dataset_name)
+    dataset_id = dataset_name if is_medmnist else resolve_dataset_id(dataset_name)
 
     def _parse_str_list(value) -> Optional[list[str]]:
         if value is None:
@@ -182,8 +190,15 @@ def train(
             online=wandb_online,
             config=locals(),
         )
-
-    raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
+    if is_medmnist:
+        raw_dataset = load_medmnist_dataset(dataset_name, cache_dir=cache_dir)
+        if image_column == "img":
+            image_column = "image"
+    elif dataset_id in VTAB_ALIASES.values():
+        raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
+    else:
+        raise ValueError(f"Dataset {dataset_id} not recognized as MedMNIST or VTAB dataset.")
+    
     if train_split not in raw_dataset or eval_split not in raw_dataset:
         raise ValueError(f"Splits {train_split}/{eval_split} not found in dataset {dataset_id}.")
 
@@ -276,6 +291,7 @@ def train(
         save_steps=eval_steps if not skip_eval else None,
         logging_steps=logging_steps,
         learning_rate=learning_rate,
+        lr_scheduler_type=lr_scheduler_type,
         weight_decay=weight_decay,
         warmup_ratio=warmup_ratio,
         per_device_train_batch_size=per_device_batch_size,
@@ -320,8 +336,8 @@ def train(
             repeat_end_lr_rate=repeat_end_lr_rate,
             final_warmup_ratio=final_warmup_ratio,
             min_lr_rate=min_lr_rate,
-            repeat_decay_type=repeat_decay_type,
-            final_decay_type=final_decay_type,
+            repeat_decay_type=lr_scheduler_type,
+            final_decay_type=lr_scheduler_type,
             warmup_start_lr_rate=warmup_start_lr_rate,
             first_warmup_start_lr_rate=first_warmup_start_lr_rate,
             last_epoch=last_epoch,

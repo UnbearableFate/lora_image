@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-DATASET="medmnist-v2:bloodmnist"
+DATASET="medmnist-v2:PneumoniaMNIST"
 MODEL_NAME="google/vit-base-patch16-224"
 
 ACCELERATE_CONFIG_FILE="${ACCELERATE_CONFIG_FILE:-lora_image/accelerate_config/local_config.yaml}"
@@ -37,10 +37,10 @@ for seed in "${SEEDS[@]}"; do
     --seed "${seed}" \
     --global_batch_size 64 \
     --per_device_batch_size 64 \
-    --num_train_epochs 5 \
-    --learning_rate 4e-4 \
-    --weight_decay 0.01 \
-    --warmup_ratio 0.03 \
+    --max_steps 1000 \
+    --learning_rate 2e-4 \
+    --weight_decay 0.05 \
+    --warmup_ratio 0.1 \
     --lora_r 16 \
     --lora_alpha 1 \
     --lora_dropout 0.01 \

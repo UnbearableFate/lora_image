@@ -13,7 +13,14 @@ from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from transformers import AutoImageProcessor, AutoModelForImageClassification, set_seed
 
-from src.data import get_label_info, load_vtab_dataset, preprocess_splits, resolve_dataset_id
+from src.data import (
+    get_label_info,
+    is_medmnist_dataset_name,
+    load_medmnist_dataset,
+    load_vtab_dataset,
+    preprocess_splits,
+    resolve_dataset_id,
+)
 
 class DataCollator:
     def __call__(self, features):
@@ -228,8 +235,14 @@ def evaluate_model(
 
     accelerator = Accelerator(mixed_precision=mixed_precision or "no")
     accelerator.print(f"Running evaluation with {accelerator.num_processes} processes.")
-    dataset_id = resolve_dataset_id(dataset_name)
-    raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
+    is_medmnist = dataset_name is not None and is_medmnist_dataset_name(dataset_name)
+    dataset_id = dataset_name if is_medmnist else resolve_dataset_id(dataset_name)
+    if is_medmnist:
+        raw_dataset = load_medmnist_dataset(dataset_name, cache_dir=cache_dir)
+        if image_column == "img":
+            image_column = "image"
+    else:
+        raw_dataset = load_vtab_dataset(dataset_id, cache_dir=cache_dir)
     if test_split not in raw_dataset:
         raise ValueError(f"Split {test_split} not found in dataset {dataset_id}.")
 

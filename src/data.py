@@ -1,9 +1,11 @@
+import os
 from typing import Dict, List, Optional, Tuple, Union
 
-from datasets import Dataset, DatasetDict, IterableDataset, load_dataset
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, IterableDataset, load_dataset
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from transformers import AutoImageProcessor
+from PIL import Image as PILImage
 
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
@@ -34,6 +36,111 @@ def resolve_dataset_id(name: str) -> str:
     """Return a full HF dataset id given a short alias or passthrough name."""
     return VTAB_ALIASES.get(name, name)
 
+MEDMNIST_PREFIXES = ("medmnist:", "medmnist-v2:")
+DEFAULT_MEDMNIST_SIZE = 224
+
+
+def is_medmnist_dataset_name(dataset_name: str) -> bool:
+    return dataset_name.startswith(MEDMNIST_PREFIXES)
+
+
+def _parse_medmnist_spec(dataset_name: str) -> Tuple[str, int]:
+    spec = dataset_name
+    for prefix in MEDMNIST_PREFIXES:
+        if dataset_name.startswith(prefix):
+            spec = dataset_name[len(prefix):]
+            break
+    if not spec:
+        raise ValueError("MedMNIST dataset name is missing a task, e.g. 'medmnist:pathmnist'.")
+    if "@" in spec:
+        task, size_str = spec.split("@", 1)
+        if not size_str:
+            raise ValueError(f"MedMNIST spec '{dataset_name}' has an empty size suffix.")
+        size = int(size_str)
+    else:
+        task = spec
+        size = DEFAULT_MEDMNIST_SIZE
+    task = task.strip().lower()
+    if not task:
+        raise ValueError("MedMNIST task name cannot be empty.")
+    return task, size
+
+
+def _medmnist_label_names(info_label: Dict[str, str]) -> List[str]:
+    try:
+        sorted_items = sorted(info_label.items(), key=lambda item: int(item[0]))
+    except (TypeError, ValueError):
+        sorted_items = list(info_label.items())
+    return [name for _, name in sorted_items]
+
+
+def _to_pil_image(img):
+    if hasattr(img, "convert"):
+        return img
+    if isinstance(img, PILImage.Image):
+        return img
+    return PILImage.fromarray(img)
+
+
+def load_medmnist_dataset(
+    dataset_name: str,
+    cache_dir: Optional[str] = None,
+) -> DatasetDict:
+    try:
+        import medmnist
+    except ImportError as exc:
+        raise ImportError(
+            "MedMNIST support requires the `medmnist` package. "
+            "Install it with `pip install medmnist`."
+        ) from exc
+
+    task, size = _parse_medmnist_spec(dataset_name)
+    info = medmnist.INFO.get(task)
+    if info is None:
+        available = ", ".join(sorted(medmnist.INFO.keys()))
+        raise ValueError(f"Unknown MedMNIST task '{task}'. Available tasks: {available}")
+
+    python_class = info.get("python_class")
+    if not python_class or not hasattr(medmnist, python_class):
+        raise ValueError(f"MedMNIST task '{task}' does not expose a python_class entry.")
+
+    if info.get("task") == "multi-label, binary-class":
+        raise ValueError(
+            f"MedMNIST task '{task}' is multi-label; this training pipeline expects single-label classification."
+        )
+
+    cls = getattr(medmnist, python_class)
+    root = os.path.join(cache_dir or "data_cache", "medmnist")
+    label_names = _medmnist_label_names(info.get("label", {}))
+    features = Features(
+        {
+            "image": Image(),
+            "label": ClassLabel(names=label_names) if label_names else ClassLabel(num_classes=int(info["n_classes"])),
+        }
+    )
+
+    splits = {}
+    for split in ("train", "val", "test"):
+        dataset = cls(split=split, download=True, size=size, root="data")
+        images = dataset.imgs
+        labels = dataset.labels
+
+        if hasattr(images, "ndim") and images.ndim >= 4 and images.shape[-1] not in (1, 3):
+            raise ValueError(
+                f"MedMNIST task '{task}' provides 3D volumes; this pipeline expects 2D images."
+            )
+
+        labels = labels.astype("int64").squeeze()
+        if labels.ndim != 1:
+            raise ValueError(f"Unexpected label shape for MedMNIST task '{task}': {labels.shape}")
+
+        image_list = [_to_pil_image(img) for img in images]
+        splits[split] = Dataset.from_dict(
+            {"image": image_list, "label": labels.tolist()},
+            features=features,
+        )
+
+    return DatasetDict(splits)
 
 def load_vtab_dataset(
     dataset_name: str,
@@ -94,7 +201,7 @@ def preprocess_splits(
                 labels = [labels]
             if label_value_to_id is not None:
                 labels = [label_value_to_id[label] for label in labels]
-            processed = [transform(img.convert("RGB")) for img in images]
+            processed = [transform(_to_pil_image(img).convert("RGB")) for img in images]
             if is_batched:
                 return {"pixel_values": processed, "labels": labels}
             return {"pixel_values": processed[0], "labels": labels[0]}
